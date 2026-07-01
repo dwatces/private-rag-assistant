@@ -74,3 +74,7 @@ The corpus here is a fictional firm's internal handbook (`corpus/`), used so the
 demo is self-contained and carries no real client data. In a deployment the firm
 points it at their own documents. For a true on-premise install, the generation
 step uses a local model so the system has no external dependencies at all.
+
+## License
+
+Released under the [MIT License](LICENSE) — © 2026 Daniel Olliver.
