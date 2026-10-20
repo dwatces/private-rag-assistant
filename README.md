@@ -1,80 +1,113 @@
-# Private Firm Knowledge Assistant
+# Private RAG Assistant
 
-A grounded question-answering assistant over a firm's **own** documents — built
-for small professional-services firms (accounting, bookkeeping, legal) that hold
-sensitive client data and can't safely paste it into public AI tools.
+A small retrieval-augmented question-answering prototype that answers questions from a folder of your own Markdown or text documents and cites the passages it used.
 
-Staff ask a question in plain English; the assistant answers using **only** the
-firm's documents, **cites the source** of every answer, and says *"that isn't in
-the firm's documents"* rather than hallucinating. It runs entirely on the firm's
-own machine — **no client or firm data leaves the building.**
+## What it is
 
-## Why it's different
+This is a prototype knowledge assistant for a small office, written with an accounting firm's internal handbook in mind. Staff ask a question in plain English and get an answer drawn from the firm's own documents, with numbered citations to the passages it used.
 
-- **Private by design.** Documents are embedded and searched locally; nothing is
-  sent to a third-party cloud unless the firm chooses to. This is the feature
-  regulated firms actually pay for.
-- **Grounded + cited.** Answers are constrained to retrieved passages and carry
-  citations, so staff can verify them — no confident nonsense.
-- **No hallucinated policy.** If the answer isn't in the documents, it says so.
+Embedding and search run locally on your machine. Answer generation is pluggable: you can stay fully offline and get the cited passages back, or have an LLM write a short answer from them.
 
-## Example interactions
+## Features
 
-> **Q: Can I paste a client's tax return into ChatGPT to summarize it?**
->
-> No. Firm policy prohibits pasting client information into public, third-party
-> cloud AI services like ChatGPT. AI tools are permitted only when client data
-> stays on firm-controlled infrastructure — to summarize a client tax return,
-> use the internal knowledge assistant, which runs entirely on firm hardware so
-> no client data leaves the building **[1]**.
->
-> *Sources: 05_data_security_and_privacy.md › Private AI Policy*
+- Loads every `.md` and `.txt` file in `corpus/` (subfolders are not searched), splits each file on its Markdown headings, then into overlapping windows of up to 150 words (a new window every 120 words), so every passage can be cited by file and section.
+- Embeds passages locally with `sentence-transformers/all-MiniLM-L6-v2` and ranks them by cosine similarity with NumPy. No GPU or vector database is needed.
+- Retrieves the top 4 passages by default (change it with `--k`).
+- Answer backends, chosen with `--backend`:
+  - `extractive`: no LLM. Prints the retrieved passages with their citations.
+  - `claude-cli`: runs the Claude Code CLI (`claude -p`) with a grounding system prompt, using an existing Claude login rather than an API key.
+  - `claude-api`: calls the Anthropic Messages API (needs `ANTHROPIC_API_KEY`).
+  - `auto` (the default): `claude-cli` if the `claude` command is on your PATH, otherwise `claude-api` if `ANTHROPIC_API_KEY` is set, otherwise `extractive`.
+- The system prompt tells the model to answer only from the numbered passages, cite them as [1], [2], and say the answer is not in the documents rather than guess.
+- `--dry-run` prints the exact system and user prompt instead of calling a model.
+- A Gradio web page (`app.py`) with a question box, example questions and a sources panel listing each passage's file, section and relevance score.
 
-> **Q: How do we onboard a new business client, and what documents do we need?**
->
-> Five-step intake **[1]**: send the welcome packet + engagement letter; collect
-> prior two years of returns, ID, and entity documents; set the client up in the
-> practice-management system and portal; assign a lead accountant; schedule a
-> kickoff call within five business days. For businesses specifically you need
-> the prior-year business return, formation documents, EIN letter, prior-year
-> financial statements, and a list of authorized contacts **[3]**.
->
-> *Sources: 01_client_onboarding.md › New Client Intake Process; › Required Documents by Client Type*
+## What stays on your machine
 
-## How it works
+- Embedding and retrieval are local. The embedding model is downloaded from Hugging Face the first time it runs. After that, your documents are not sent anywhere to be searched.
+- With `--backend extractive`, your questions and documents stay on the machine.
+- The `claude-cli` and `claude-api` backends send your question and the retrieved passages to Anthropic to write the answer.
+- `auto` picks `claude-cli` whenever the `claude` command is installed, so pass `--backend extractive` if you need to stay offline.
+- The web UI always uses the `claude-cli` backend.
+- There is no local LLM backend in this repository.
 
-```
-documents ──▶ chunk by heading ──▶ embed locally ──▶ cosine retrieval ──▶ grounded answer (cited)
-              (corpus/*.md)         (sentence-          (numpy)            (LLM, pluggable backend)
-                                     transformers)
-```
+## Tech stack
 
-- **Retrieval:** `sentence-transformers/all-MiniLM-L6-v2` embeddings + numpy
-  cosine search. Fully local, no GPU required.
-- **Generation backends** (pluggable, see `rag.py`):
-  - `claude-cli` — uses an existing Claude subscription via the Claude Code CLI; no API key. *(used for this demo)*
-  - `claude-api` — uses the Anthropic API with the client's own key. *(the shipped-product path)*
-  - `extractive` — no LLM at all; returns the cited passages directly. Fully offline, $0.
-  - A fully-local LLM backend (e.g. a small quantized model) is the drop-in for a true air-gapped deployment.
+- Python
+- sentence-transformers and NumPy for embeddings and search
+- Gradio for the web UI
+- Optional: the Anthropic Python SDK (`claude-api` backend) or the Claude Code CLI (`claude-cli` backend and the web UI)
 
-## Run it
+## Run it locally
+
+### 1. Install
+
+There is no requirements file. These are the packages the code imports. The web UI needs Gradio 6 or later, because `app.py` passes its theme to `launch()`, which older Gradio versions do not accept. Gradio 6 and current sentence-transformers need Python 3.10 or later.
 
 ```bash
-# command line
-python rag.py "What are our standard billing rates?"
-python rag.py --interactive
-
-# web UI
-python app.py        # then open http://localhost:7860
+python -m venv .venv
+source .venv/bin/activate
+pip install numpy sentence-transformers "gradio>=6"
+pip install anthropic   # only needed for the claude-api backend
 ```
 
-## Notes
+### 2. Add your documents
 
-The corpus here is a fictional firm's internal handbook (`corpus/`), used so the
-demo is self-contained and carries no real client data. In a deployment the firm
-points it at their own documents. For a true on-premise install, the generation
-step uses a local model so the system has no external dependencies at all.
+The repository does not include any documents. Create a `corpus/` folder next to `rag.py` and put your `.md` or `.txt` files in it. Markdown headings become the section names shown in citations. Until `corpus/` has files in it, `rag.py` stops with "No documents found".
 
-## License
+`corpus/` is not listed in `.gitignore`, so take care not to commit private documents.
 
-Released under the [MIT License](LICENSE) — © 2026 Daniel Olliver.
+### 3. Ask questions from the command line
+
+```bash
+python rag.py "What is our client onboarding process?"
+python rag.py --interactive
+python rag.py --backend extractive "What are our billing rates?"
+python rag.py --dry-run "Can I use ChatGPT with client data?"
+```
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `--backend` | `auto` | `auto`, `extractive`, `claude-cli` or `claude-api` |
+| `--model` | `claude-haiku-4-5` | Model used by the Claude backends |
+| `--k` | `4` | Number of passages to retrieve |
+| `--dry-run` | off | Print the grounded prompt instead of calling a model |
+| `--interactive` | off | Keep asking questions until a blank line, `exit` or `quit` |
+
+Each answer is followed by a `Sources:` line listing the file and section of every retrieved passage.
+
+### 4. Or use the web UI
+
+```bash
+python app.py
+```
+
+Then open http://localhost:7860 (it listens on 127.0.0.1 only). The web UI needs documents in `corpus/`, and the Claude Code CLI installed and signed in, because it always uses the `claude-cli` backend.
+
+The page title, heading and example questions are written for the fictional accounting firm the demo was built around ("Birchwood & Vale, CPAs"). Edit `app.py` to change them.
+
+### Environment variables
+
+- `ANTHROPIC_API_KEY`: used by the `claude-api` backend, and checked by `auto` when choosing a backend.
+
+## Project structure
+
+```
+rag.py      Loading, chunking, retrieval, prompt building, backends and the CLI
+app.py      Gradio web UI built on rag.py
+corpus/     Your documents (not included, create it yourself)
+LICENSE     MIT licence
+```
+
+## Limitations
+
+- The index is rebuilt in memory each time the script starts. It is not saved to disk.
+- It is a prototype: there are no tests, no requirements file and no login on the web UI.
+
+## Licence
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Daniel Olliver.
+
+## Author
+
+Daniel Olliver, [danielolliver.com](https://danielolliver.com/)
